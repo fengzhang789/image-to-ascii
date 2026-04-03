@@ -224,11 +224,32 @@ function analyzeImage(img) {
     lums[i] = 0.299 * data[s] + 0.587 * data[s + 1] + 0.114 * data[s + 2];
   }
 
-  // Percentiles
-  const sorted = lums.slice().sort();
-  const p2  = sorted[Math.floor(n * 0.02)];
-  const p50 = sorted[Math.floor(n * 0.50)];
-  const p98 = sorted[Math.floor(n * 0.98)];
+  // Histogram (256 bins)
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < n; i++) hist[Math.round(lums[i])]++;
+
+  // Percentile bounds via histogram walk (Simplest Color Balance, Limare et al. 2011)
+  // Using 0.5% clip on each end — robust against outlier pixels
+  const CLIP = 0.005;
+  let lo = 0, hi = 255, cum = 0;
+  for (let i = 0; i < 256; i++) {
+    cum += hist[i] / n;
+    if (cum >= CLIP) { lo = i; break; }
+  }
+  cum = 0;
+  for (let i = 255; i >= 0; i--) {
+    cum += hist[i] / n;
+    if (cum >= CLIP) { hi = i; break; }
+  }
+  if (hi - lo < 10) { lo = 0; hi = 255; }
+
+  // Median via histogram walk
+  cum = 0;
+  let median = 128;
+  for (let i = 0; i < 256; i++) {
+    cum += hist[i] / n;
+    if (cum >= 0.5) { median = i; break; }
+  }
 
   // Laplacian variance (blur/sharpness measure)
   let lapSumSq = 0;
@@ -242,30 +263,76 @@ function analyzeImage(img) {
   }
   const lapVar = lapSumSq / ((AW - 2) * (AH - 2));
 
-  return { p2, p50, p98, lapVar };
+  return { lo, hi, median, hist, n, lapVar };
 }
 
+// Solve for CSS brightness(B%) contrast(C%) that maps [lo, hi] → [targetLo, targetHi].
+//
+// CSS applies brightness then contrast as a single linear transform:
+//   output = input * slope + offset
+// where:
+//   slope  = B * C / 10000
+//   offset = 0.5 * (1 - C / 100)       (in 0–1 space, i.e. 127.5*(1 - C/100) in 0–255)
+//
+// Two equations (lo→targetLo, hi→targetHi) give slope and offset,
+// then we recover B and C.
+
 function computeAutoSettings(stats) {
-  const { p2, p50, p98, lapVar } = stats;
+  const { lo, hi, median, hist, n, lapVar } = stats;
 
-  const sum  = Math.max(p2 + p98, 1);
-  const diff = Math.max(p98 - p2, 5);
+  // ── Brightness & Contrast ──
+  // Target range: intentionally below full 0–255 to prevent clipping/over-brightening.
+  // Leave headroom at both ends so detail isn't crushed.
+  const TARGET_LO = 0.03;   // ~8/255 — preserve dark detail
+  const TARGET_HI = 0.90;   // ~230/255 — prevent blown-out highlights
 
-  const brightness = Math.round(Math.min(200, Math.max(30, 25500 / sum)));
-  const contrast   = Math.round(Math.min(300, Math.max(50,  100 * sum / diff)));
+  const loN = lo / 255;
+  const hiN = hi / 255;
+  const slope  = (TARGET_HI - TARGET_LO) / (hiN - loN);
+  const offset = TARGET_LO - loN * slope;
 
-  // Where does the raw median land after applying brightness → contrast?
-  const mappedMedian = Math.min(255, Math.max(0,
-    (p50 * brightness / 100 - 127.5) * contrast / 100 + 127.5
-  ));
-  const threshold = Math.round(Math.min(245, Math.max(10, mappedMedian)));
+  // Recover C and B from slope/offset:
+  //   offset = 0.5 * (1 - C/100)  →  C = 100 * (1 - 2*offset)
+  //   slope  = B * C / 10000      →  B = 10000 * slope / C
+  let C = 100 * (1 - 2 * offset);
+  let B = C > 0 ? (10000 * slope) / C : 100;
 
-  // Sharpness: suggest sharpening for blurry images
+  // Clamp to safe ranges — extreme values cause ugly clipping
+  B = Math.round(Math.min(180, Math.max(50, B)));
+  C = Math.round(Math.min(180, Math.max(50, C)));
+
+  // ── Threshold (braille) ──
+  // Find the threshold that yields ~50% dot fill in the transformed image.
+  // Walk the histogram, transform each bin through our B/C, and find the
+  // median of the output distribution.
+  const effectiveSlope  = B * C / 10000;
+  const effectiveOffset = 127.5 * (1 - C / 100);
+  const mapLum = (l) => Math.min(255, Math.max(0, l * effectiveSlope + effectiveOffset));
+
+  let cum = 0;
+  let threshold = 128;
+  for (let i = 0; i < 256; i++) {
+    cum += hist[i] / n;
+    if (cum >= 0.50) {
+      threshold = Math.round(mapLum(i));
+      break;
+    }
+  }
+  threshold = Math.min(240, Math.max(15, threshold));
+
+  // ── Sharpness ──
+  // Smooth continuous curve: lapVar ~50 → 8, ~200 → 4, ~500 → 1, >800 → 0
   let sharpness = 0;
-  if      (lapVar < 80)  sharpness = 7;
-  else if (lapVar < 300) sharpness = 3;
+  if (lapVar < 800) {
+    sharpness = Math.round(8 * (1 - Math.sqrt(lapVar / 800)));
+  }
 
-  return { brightness, contrast, threshold, sharpness };
+  // ── Saturation ──
+  // Conversion is luminance-only so we desaturate to avoid color crosstalk
+  // distorting perceived brightness. Full desaturation (0%) gives cleanest result.
+  const saturation = 0;
+
+  return { brightness: B, contrast: C, threshold, sharpness, saturation };
 }
 
 // ── UI wiring ──────────────────────────────────────────────────────────────
@@ -407,10 +474,11 @@ autoBtn.addEventListener('click', () => {
     try {
       const stats    = analyzeImage(previewImg);
       const settings = computeAutoSettings(stats);
-      brightnessInput.value = settings.brightness;
-      contrastInput.value   = settings.contrast;
-      threshInput.value     = settings.threshold;
-      sharpnessInput.value  = settings.sharpness;
+      brightnessInput.value  = settings.brightness;
+      contrastInput.value    = settings.contrast;
+      threshInput.value      = settings.threshold;
+      sharpnessInput.value   = settings.sharpness;
+      saturationInput.value  = settings.saturation;
       syncLabels();
       schedulePreview();
     } finally {
