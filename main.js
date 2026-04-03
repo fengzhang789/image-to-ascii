@@ -195,6 +195,79 @@ function convertImage(img, params) {
     : imageDataToBraille(imageData, pixelWidth, pixelHeight, threshold);
 }
 
+// ── Auto-tune ─────────────────────────────────────────────────────────────
+//
+// Analyzes the raw image histogram to compute optimal settings:
+//  - Brightness + Contrast: histogram stretching so p2→0 and p98→255
+//    Derivation: if CSS applies brightness(B%) then contrast(C%), the two-
+//    equation system (p2→0, p98→255) gives:
+//      B = 25500 / (p2 + p98)
+//      C = 100 * (p2 + p98) / (p98 - p2)
+//  - Threshold (braille): maps the raw median through the auto B/C to get
+//    the luminance that sits at the midpoint after filtering
+//  - Sharpness: Laplacian variance detects image blur; low variance → suggest
+//    sharpening so fine detail survives the ASCII quantization step
+
+function analyzeImage(img) {
+  const AW = 250;
+  const AH = Math.max(1, Math.round(AW * img.naturalHeight / img.naturalWidth));
+  const ac  = document.createElement('canvas');
+  ac.width  = AW;
+  ac.height = AH;
+  ac.getContext('2d').drawImage(img, 0, 0, AW, AH);
+  const { data } = ac.getContext('2d').getImageData(0, 0, AW, AH);
+
+  const n    = AW * AH;
+  const lums = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const s = i * 4;
+    lums[i] = 0.299 * data[s] + 0.587 * data[s + 1] + 0.114 * data[s + 2];
+  }
+
+  // Percentiles
+  const sorted = lums.slice().sort();
+  const p2  = sorted[Math.floor(n * 0.02)];
+  const p50 = sorted[Math.floor(n * 0.50)];
+  const p98 = sorted[Math.floor(n * 0.98)];
+
+  // Laplacian variance (blur/sharpness measure)
+  let lapSumSq = 0;
+  for (let y = 1; y < AH - 1; y++) {
+    for (let x = 1; x < AW - 1; x++) {
+      const c   = lums[y * AW + x];
+      const lap = lums[(y-1)*AW+x] + lums[(y+1)*AW+x]
+                + lums[y*AW+x-1]   + lums[y*AW+x+1] - 4 * c;
+      lapSumSq += lap * lap;
+    }
+  }
+  const lapVar = lapSumSq / ((AW - 2) * (AH - 2));
+
+  return { p2, p50, p98, lapVar };
+}
+
+function computeAutoSettings(stats) {
+  const { p2, p50, p98, lapVar } = stats;
+
+  const sum  = Math.max(p2 + p98, 1);
+  const diff = Math.max(p98 - p2, 5);
+
+  const brightness = Math.round(Math.min(200, Math.max(30, 25500 / sum)));
+  const contrast   = Math.round(Math.min(300, Math.max(50,  100 * sum / diff)));
+
+  // Where does the raw median land after applying brightness → contrast?
+  const mappedMedian = Math.min(255, Math.max(0,
+    (p50 * brightness / 100 - 127.5) * contrast / 100 + 127.5
+  ));
+  const threshold = Math.round(Math.min(245, Math.max(10, mappedMedian)));
+
+  // Sharpness: suggest sharpening for blurry images
+  let sharpness = 0;
+  if      (lapVar < 80)  sharpness = 7;
+  else if (lapVar < 300) sharpness = 3;
+
+  return { brightness, contrast, threshold, sharpness };
+}
+
 // ── UI wiring ──────────────────────────────────────────────────────────────
 
 let currentFile = null;
@@ -203,6 +276,7 @@ let previewImg  = null;
 const dropZone        = document.getElementById('drop-zone');
 const fileInput       = document.getElementById('file-input');
 const convertBtn      = document.getElementById('convert-btn');
+const autoBtn         = document.getElementById('auto-btn');
 const copyBtn         = document.getElementById('copy-btn');
 const saveBtn         = document.getElementById('save-btn');
 const resetBtn        = document.getElementById('reset-btn');
@@ -323,6 +397,29 @@ sliderInputs.forEach(el => el.addEventListener('input', () => { syncLabels(); sc
 modeInput.addEventListener('change', () => { syncModeUI(); schedulePreview(); });
 rampInput.addEventListener('change', schedulePreview);
 
+autoBtn.addEventListener('click', () => {
+  if (!previewImg) return;
+  autoBtn.textContent = 'Analyzing…';
+  autoBtn.disabled = true;
+
+  // Run after current frame so the button label updates
+  requestAnimationFrame(() => {
+    try {
+      const stats    = analyzeImage(previewImg);
+      const settings = computeAutoSettings(stats);
+      brightnessInput.value = settings.brightness;
+      contrastInput.value   = settings.contrast;
+      threshInput.value     = settings.threshold;
+      sharpnessInput.value  = settings.sharpness;
+      syncLabels();
+      schedulePreview();
+    } finally {
+      autoBtn.textContent = 'Auto';
+      autoBtn.disabled = false;
+    }
+  });
+});
+
 resetBtn.addEventListener('click', () => {
   widthInput.value       = DEFAULTS.width;
   modeInput.value        = DEFAULTS.mode;
@@ -349,6 +446,7 @@ function setFile(file) {
   dropZone.textContent = `Selected: ${file.name}`;
   dropZone.classList.add('has-file');
   convertBtn.disabled = false;
+  autoBtn.disabled    = false;
 
   const url = URL.createObjectURL(file);
   const img = new Image();
