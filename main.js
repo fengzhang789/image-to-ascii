@@ -10,6 +10,95 @@ const DOT_BITS = [
   [0x40, 0x80],
 ];
 
+// ASCII character ramps (dark → light luminance maps to index 0 → last)
+const ASCII_RAMPS = {
+  standard: ' .:-=+*#%@',
+  dense:    " .'`^,:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$",
+  blocks:   ' ░▒▓█',
+  minimal:  ' .+@',
+};
+
+// ── Convolution helpers ────────────────────────────────────────────────────
+
+function applyConvolution(data, width, height, kernel) {
+  const result = new Uint8ClampedArray(data.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let r = 0, g = 0, b = 0;
+      for (let ky = -1; ky <= 1; ky++) {
+        for (let kx = -1; kx <= 1; kx++) {
+          const sx = Math.min(Math.max(x + kx, 0), width - 1);
+          const sy = Math.min(Math.max(y + ky, 0), height - 1);
+          const si = (sy * width + sx) * 4;
+          const w = kernel[(ky + 1) * 3 + (kx + 1)];
+          r += data[si]     * w;
+          g += data[si + 1] * w;
+          b += data[si + 2] * w;
+        }
+      }
+      const i = (y * width + x) * 4;
+      result[i]     = Math.min(Math.max(Math.round(r), 0), 255);
+      result[i + 1] = Math.min(Math.max(Math.round(g), 0), 255);
+      result[i + 2] = Math.min(Math.max(Math.round(b), 0), 255);
+      result[i + 3] = data[i + 3];
+    }
+  }
+  for (let i = 0; i < data.length; i++) data[i] = result[i];
+}
+
+function applySharpen(data, width, height, amount) {
+  const a = Math.min(amount, 10) * 0.1;
+  applyConvolution(data, width, height, [
+    0,   -a,        0,
+   -a,  1 + 4 * a, -a,
+    0,   -a,        0,
+  ]);
+}
+
+function applySobel(data, width, height) {
+  const gxK = [-1, 0, 1, -2, 0, 2, -1, 0, 1];
+  const gyK = [-1, -2, -1, 0, 0, 0, 1, 2, 1];
+  const result = new Uint8ClampedArray(data.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let Gx = 0, Gy = 0;
+      for (let ky = -1; ky <= 1; ky++) {
+        for (let kx = -1; kx <= 1; kx++) {
+          const sx = Math.min(Math.max(x + kx, 0), width - 1);
+          const sy = Math.min(Math.max(y + ky, 0), height - 1);
+          const si = (sy * width + sx) * 4;
+          const lum = 0.299 * data[si] + 0.587 * data[si + 1] + 0.114 * data[si + 2];
+          const ki = (ky + 1) * 3 + (kx + 1);
+          Gx += lum * gxK[ki];
+          Gy += lum * gyK[ki];
+        }
+      }
+      const mag = Math.min(Math.sqrt(Gx * Gx + Gy * Gy), 255);
+      const i = (y * width + x) * 4;
+      result[i] = result[i + 1] = result[i + 2] = mag;
+      result[i + 3] = 255;
+    }
+  }
+  for (let i = 0; i < data.length; i++) data[i] = result[i];
+}
+
+function applyPostProcessing(imageData, sharpness, edgeDetect) {
+  const { data, width, height } = imageData;
+  if (sharpness > 0) applySharpen(data, width, height, sharpness);
+  if (edgeDetect)    applySobel(data, width, height);
+}
+
+// ── CSS filter string ──────────────────────────────────────────────────────
+
+function buildFilterString(brightness, contrast, saturation, hue, invert, sharpness) {
+  let f = `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) hue-rotate(${hue}deg)`;
+  if (invert)      f += ' invert(100%)';
+  if (sharpness < 0) f += ` blur(${(-sharpness * 0.3).toFixed(1)}px)`;
+  return f;
+}
+
+// ── Converters ────────────────────────────────────────────────────────────
+
 function imageDataToBraille(imageData, pixelWidth, pixelHeight, threshold) {
   const { data } = imageData;
   const charWidth  = Math.ceil(pixelWidth  / 2);
@@ -17,7 +106,7 @@ function imageDataToBraille(imageData, pixelWidth, pixelHeight, threshold) {
   const lines = [];
 
   for (let cy = 0; cy < charHeight; cy++) {
-    let line = "";
+    let line = '';
     for (let cx = 0; cx < charWidth; cx++) {
       let bits = 0;
       for (let dy = 0; dy < 4; dy++) {
@@ -35,42 +124,75 @@ function imageDataToBraille(imageData, pixelWidth, pixelHeight, threshold) {
     lines.push(line.trimEnd());
   }
 
-  return lines.join("\n").replace(/\n+$/, "");
+  return lines.join('\n').replace(/\n+$/, '');
 }
 
-function buildFilterString(brightness, contrast, grayscale, invert) {
-  return `brightness(${brightness}%) contrast(${contrast}%) grayscale(${grayscale}%)${invert ? " invert(100%)" : ""}`;
+function imageDataToAscii(imageData, pixelWidth, pixelHeight, rampKey, spaceDensity) {
+  const { data } = imageData;
+  const ramp = ASCII_RAMPS[rampKey] || ASCII_RAMPS.standard;
+  const lines = [];
+
+  for (let y = 0; y < pixelHeight; y++) {
+    let line = '';
+    for (let x = 0; x < pixelWidth; x++) {
+      const idx = (y * pixelWidth + x) * 4;
+      let lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+      // Space density shifts luminance up → more pixels map to bright end (space)
+      lum = Math.min(lum + (spaceDensity / 100) * 255, 255);
+      const charIdx = Math.floor((lum / 255) * (ramp.length - 1));
+      line += ramp[charIdx];
+    }
+    lines.push(line.trimEnd());
+  }
+
+  return lines.join('\n').replace(/\n+$/, '');
 }
 
-function imageFileToBraille(file, charWidth, invert, threshold, brightness, contrast, grayscale) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
+function addBorder(text) {
+  const lines = text.split('\n');
+  const maxLen = Math.max(...lines.map(l => l.length));
+  const blank = ' '.repeat(maxLen + 2);
+  const padded = lines.map(l => ' ' + l + ' '.repeat(maxLen - l.length) + ' ');
+  return [blank, ...padded, blank].join('\n');
+}
 
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const canvas = document.getElementById("canvas");
-      const ctx = canvas.getContext("2d");
+// ── Render to hidden canvas and convert ───────────────────────────────────
 
-      const pixelWidth  = charWidth * 2;
-      const pixelHeight = Math.max(4, Math.round(pixelWidth * (img.naturalHeight / img.naturalWidth)));
+function renderToCanvas(canvas, img, pixelWidth, pixelHeight, filterStr) {
+  const ctx = canvas.getContext('2d');
+  canvas.width  = pixelWidth;
+  canvas.height = pixelHeight;
+  ctx.filter = filterStr;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pixelWidth, pixelHeight);
+  ctx.drawImage(img, 0, 0, pixelWidth, pixelHeight);
+  ctx.filter = 'none';
+  return ctx.getImageData(0, 0, pixelWidth, pixelHeight);
+}
 
-      canvas.width  = pixelWidth;
-      canvas.height = pixelHeight;
+function convertImage(img, params) {
+  const { mode, charWidth, brightness, contrast, saturation, hue, invert,
+          sharpness, edgeDetect, threshold, rampKey, spaceDensity } = params;
 
-      ctx.filter = buildFilterString(brightness, contrast, grayscale, invert);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, pixelWidth, pixelHeight);
-      ctx.drawImage(img, 0, 0, pixelWidth, pixelHeight);
-      ctx.filter = "none";
+  const filterStr = buildFilterString(brightness, contrast, saturation, hue, invert, sharpness);
+  const canvas = document.getElementById('canvas');
 
-      const imageData = ctx.getImageData(0, 0, pixelWidth, pixelHeight);
-      resolve(imageDataToBraille(imageData, pixelWidth, pixelHeight, threshold));
-    };
+  let pixelWidth, pixelHeight;
+  if (mode === 'ascii') {
+    // 1 char per pixel; account for monospace char being ~2× taller than wide
+    pixelWidth  = charWidth;
+    pixelHeight = Math.max(1, Math.round(charWidth * (img.naturalHeight / img.naturalWidth) * 0.45));
+  } else {
+    pixelWidth  = charWidth * 2;
+    pixelHeight = Math.max(4, Math.round(pixelWidth * (img.naturalHeight / img.naturalWidth)));
+  }
 
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Failed to load image")); };
-    img.src = url;
-  });
+  const imageData = renderToCanvas(canvas, img, pixelWidth, pixelHeight, filterStr);
+  applyPostProcessing(imageData, sharpness, edgeDetect);
+
+  return mode === 'ascii'
+    ? imageDataToAscii(imageData, pixelWidth, pixelHeight, rampKey, spaceDensity)
+    : imageDataToBraille(imageData, pixelWidth, pixelHeight, threshold);
 }
 
 // ── UI wiring ──────────────────────────────────────────────────────────────
@@ -78,83 +200,154 @@ function imageFileToBraille(file, charWidth, invert, threshold, brightness, cont
 let currentFile = null;
 let previewImg  = null;
 
-const dropZone        = document.getElementById("drop-zone");
-const fileInput       = document.getElementById("file-input");
-const convertBtn      = document.getElementById("convert-btn");
-const copyBtn         = document.getElementById("copy-btn");
-const saveBtn         = document.getElementById("save-btn");
-const resetBtn        = document.getElementById("reset-btn");
-const output          = document.getElementById("braille-output");
-const copyStatus      = document.getElementById("copy-status");
-const widthInput      = document.getElementById("width-input");
-const brightnessInput = document.getElementById("brightness-input");
-const brightnessVal   = document.getElementById("brightness-val");
-const contrastInput   = document.getElementById("contrast-input");
-const contrastVal     = document.getElementById("contrast-val");
-const grayscaleInput  = document.getElementById("grayscale-input");
-const grayscaleVal    = document.getElementById("grayscale-val");
-const invertInput     = document.getElementById("invert-input");
-const threshInput     = document.getElementById("threshold-input");
-const threshVal       = document.getElementById("threshold-val");
-const codeblockInput  = document.getElementById("codeblock-input");
-const previewSection  = document.getElementById("preview-section");
-const previewCanvas   = document.getElementById("preview-canvas");
+const dropZone        = document.getElementById('drop-zone');
+const fileInput       = document.getElementById('file-input');
+const convertBtn      = document.getElementById('convert-btn');
+const copyBtn         = document.getElementById('copy-btn');
+const saveBtn         = document.getElementById('save-btn');
+const resetBtn        = document.getElementById('reset-btn');
+const output          = document.getElementById('art-output');
+const copyStatus      = document.getElementById('copy-status');
+const widthInput      = document.getElementById('width-input');
+const modeInput       = document.getElementById('mode-input');
+const brightnessInput = document.getElementById('brightness-input');
+const brightnessVal   = document.getElementById('brightness-val');
+const contrastInput   = document.getElementById('contrast-input');
+const contrastVal     = document.getElementById('contrast-val');
+const saturationInput = document.getElementById('saturation-input');
+const saturationVal   = document.getElementById('saturation-val');
+const hueInput        = document.getElementById('hue-input');
+const hueVal          = document.getElementById('hue-val');
+const invertInput     = document.getElementById('invert-input');
+const sharpnessInput  = document.getElementById('sharpness-input');
+const sharpnessVal    = document.getElementById('sharpness-val');
+const edgeInput       = document.getElementById('edge-input');
+const thresholdRow    = document.getElementById('threshold-row');
+const threshInput     = document.getElementById('threshold-input');
+const threshVal       = document.getElementById('threshold-val');
+const asciiSection    = document.getElementById('ascii-section');
+const rampInput       = document.getElementById('ramp-input');
+const densityInput    = document.getElementById('density-input');
+const densityVal      = document.getElementById('density-val');
+const codeblockInput  = document.getElementById('codeblock-input');
+const borderInput     = document.getElementById('border-input');
+const previewSection  = document.getElementById('preview-section');
+const previewCanvas   = document.getElementById('preview-canvas');
 
-const DEFAULTS = { width: 60, brightness: 100, contrast: 100, grayscale: 0, threshold: 128, invert: false, codeblock: true };
+const DEFAULTS = {
+  width: 60, mode: 'braille',
+  brightness: 100, contrast: 100, saturation: 100, hue: 0, invert: false,
+  sharpness: 0, edge: false,
+  threshold: 128,
+  ramp: 'standard', density: 0,
+  codeblock: true, border: false,
+};
 
-function syncSliderLabels() {
-  brightnessVal.textContent = brightnessInput.value + "%";
-  contrastVal.textContent   = contrastInput.value   + "%";
-  grayscaleVal.textContent  = grayscaleInput.value  + "%";
+function syncLabels() {
+  brightnessVal.textContent = brightnessInput.value + '%';
+  contrastVal.textContent   = contrastInput.value   + '%';
+  saturationVal.textContent = saturationInput.value + '%';
+  hueVal.textContent        = hueInput.value        + '°';
+  sharpnessVal.textContent  = sharpnessInput.value;
   threshVal.textContent     = threshInput.value;
+  densityVal.textContent    = densityInput.value    + '%';
+}
+
+function syncModeUI() {
+  const isAscii = modeInput.value === 'ascii';
+  asciiSection.style.display   = isAscii ? 'flex' : 'none';
+  thresholdRow.style.display   = isAscii ? 'none' : 'grid';
+}
+
+function getParams() {
+  return {
+    mode:        modeInput.value,
+    charWidth:   Math.max(10, Math.min(300, parseInt(widthInput.value, 10) || 60)),
+    brightness:  parseInt(brightnessInput.value, 10),
+    contrast:    parseInt(contrastInput.value, 10),
+    saturation:  parseInt(saturationInput.value, 10),
+    hue:         parseInt(hueInput.value, 10),
+    invert:      invertInput.checked,
+    sharpness:   parseInt(sharpnessInput.value, 10),
+    edgeDetect:  edgeInput.checked,
+    threshold:   parseInt(threshInput.value, 10),
+    rampKey:     rampInput.value,
+    spaceDensity: parseInt(densityInput.value, 10),
+    codeblock:   codeblockInput.checked,
+    border:      borderInput.checked,
+  };
+}
+
+// ── Preview ────────────────────────────────────────────────────────────────
+
+let previewTimer = null;
+
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(updatePreview, 30);
 }
 
 function updatePreview() {
   if (!previewImg) return;
-  const ctx = previewCanvas.getContext("2d");
+  const p = getParams();
+  const ctx = previewCanvas.getContext('2d');
 
   const MAX_W = previewSection.clientWidth || 860;
   const MAX_H = 420;
   const scale = Math.min(1, MAX_W / previewImg.naturalWidth, MAX_H / previewImg.naturalHeight);
   const w = Math.round(previewImg.naturalWidth  * scale);
   const h = Math.round(previewImg.naturalHeight * scale);
-
   previewCanvas.width  = w;
   previewCanvas.height = h;
 
-  const brightness = parseInt(brightnessInput.value, 10);
-  const contrast   = parseInt(contrastInput.value, 10);
-  const grayscale  = parseInt(grayscaleInput.value, 10);
-  const invert     = invertInput.checked;
-
-  ctx.filter = buildFilterString(brightness, contrast, grayscale, invert);
+  const filterStr = buildFilterString(p.brightness, p.contrast, p.saturation, p.hue, p.invert, p.sharpness);
+  ctx.filter = filterStr;
   ctx.drawImage(previewImg, 0, 0, w, h);
-  ctx.filter = "none";
+  ctx.filter = 'none';
+
+  // Apply post-processing to preview too so it matches the conversion
+  if (p.sharpness > 0 || p.edgeDetect) {
+    const imageData = ctx.getImageData(0, 0, w, h);
+    applyPostProcessing(imageData, p.sharpness, p.edgeDetect);
+    ctx.putImageData(imageData, 0, 0);
+  }
 }
 
-brightnessInput.addEventListener("input", () => { syncSliderLabels(); updatePreview(); });
-contrastInput.addEventListener("input",   () => { syncSliderLabels(); updatePreview(); });
-grayscaleInput.addEventListener("input",  () => { syncSliderLabels(); updatePreview(); });
-threshInput.addEventListener("input",     syncSliderLabels);
-invertInput.addEventListener("change",    updatePreview);
+// ── Controls wiring ────────────────────────────────────────────────────────
 
-resetBtn.addEventListener("click", () => {
+const sliderInputs = [brightnessInput, contrastInput, saturationInput, hueInput,
+                      sharpnessInput, threshInput, densityInput];
+sliderInputs.forEach(el => el.addEventListener('input', () => { syncLabels(); schedulePreview(); }));
+
+[invertInput, edgeInput].forEach(el => el.addEventListener('change', schedulePreview));
+modeInput.addEventListener('change', () => { syncModeUI(); schedulePreview(); });
+rampInput.addEventListener('change', schedulePreview);
+
+resetBtn.addEventListener('click', () => {
   widthInput.value       = DEFAULTS.width;
+  modeInput.value        = DEFAULTS.mode;
   brightnessInput.value  = DEFAULTS.brightness;
   contrastInput.value    = DEFAULTS.contrast;
-  grayscaleInput.value   = DEFAULTS.grayscale;
-  threshInput.value      = DEFAULTS.threshold;
+  saturationInput.value  = DEFAULTS.saturation;
+  hueInput.value         = DEFAULTS.hue;
   invertInput.checked    = DEFAULTS.invert;
+  sharpnessInput.value   = DEFAULTS.sharpness;
+  edgeInput.checked      = DEFAULTS.edge;
+  threshInput.value      = DEFAULTS.threshold;
+  rampInput.value        = DEFAULTS.ramp;
+  densityInput.value     = DEFAULTS.density;
   codeblockInput.checked = DEFAULTS.codeblock;
-  syncSliderLabels();
-  updatePreview();
+  borderInput.checked    = DEFAULTS.border;
+  syncLabels();
+  syncModeUI();
+  schedulePreview();
 });
 
 function setFile(file) {
-  if (!file || !file.type.startsWith("image/")) return;
+  if (!file || !file.type.startsWith('image/')) return;
   currentFile = file;
   dropZone.textContent = `Selected: ${file.name}`;
-  dropZone.classList.add("has-file");
+  dropZone.classList.add('has-file');
   convertBtn.disabled = false;
 
   const url = URL.createObjectURL(file);
@@ -162,60 +355,56 @@ function setFile(file) {
   img.onload = () => {
     URL.revokeObjectURL(url);
     previewImg = img;
-    previewSection.style.display = "flex";
+    previewSection.style.display = 'flex';
     updatePreview();
   };
   img.onerror = () => URL.revokeObjectURL(url);
   img.src = url;
 }
 
-dropZone.addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", () => setFile(fileInput.files[0]));
-dropZone.addEventListener("dragover",  (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
-dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
-dropZone.addEventListener("drop", (e) => {
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
-  dropZone.classList.remove("drag-over");
+  dropZone.classList.remove('drag-over');
   setFile(e.dataTransfer.files[0]);
 });
 
-convertBtn.addEventListener("click", async () => {
-  if (!currentFile) return;
+convertBtn.addEventListener('click', async () => {
+  if (!previewImg) return;
 
-  const charWidth  = Math.max(10, Math.min(300, parseInt(widthInput.value, 10) || 60));
-  const brightness = parseInt(brightnessInput.value, 10);
-  const contrast   = parseInt(contrastInput.value, 10);
-  const grayscale  = parseInt(grayscaleInput.value, 10);
-  const invert     = invertInput.checked;
-  const threshold  = parseInt(threshInput.value, 10);
-  const codeblock  = codeblockInput.checked;
-
+  const p = getParams();
   convertBtn.disabled = true;
-  convertBtn.textContent = "Converting…";
-  output.textContent = "";
+  convertBtn.textContent = 'Converting…';
+  output.textContent = '';
   copyBtn.disabled = true;
   saveBtn.disabled = true;
 
   try {
-    const braille = await imageFileToBraille(currentFile, charWidth, invert, threshold, brightness, contrast, grayscale);
-    output.textContent = codeblock ? `\`\`\`\n${braille}\n\`\`\`` : braille;
+    // Run in next tick so the button state updates render first
+    await new Promise(r => setTimeout(r, 0));
+    let art = convertImage(previewImg, p);
+    if (p.border) art = addBorder(art);
+    output.textContent = p.codeblock ? `\`\`\`\n${art}\n\`\`\`` : art;
     copyBtn.disabled = false;
     saveBtn.disabled = false;
   } catch (err) {
     output.textContent = `Error: ${err.message}`;
   } finally {
     convertBtn.disabled = false;
-    convertBtn.textContent = "Convert";
+    convertBtn.textContent = 'Convert';
   }
 });
 
-copyBtn.addEventListener("click", async () => {
+copyBtn.addEventListener('click', async () => {
   const text = output.textContent;
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
-    copyStatus.classList.add("show");
-    setTimeout(() => copyStatus.classList.remove("show"), 1800);
+    copyStatus.classList.add('show');
+    setTimeout(() => copyStatus.classList.remove('show'), 1800);
   } catch {
     const range = document.createRange();
     range.selectNodeContents(output);
@@ -225,13 +414,17 @@ copyBtn.addEventListener("click", async () => {
   }
 });
 
-saveBtn.addEventListener("click", () => {
+saveBtn.addEventListener('click', () => {
   const text = output.textContent;
   if (!text) return;
-  const blob = new Blob([text], { type: "text/plain" });
-  const a = document.createElement("a");
+  const blob = new Blob([text], { type: 'text/plain' });
+  const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (currentFile?.name.replace(/\.[^.]+$/, "") ?? "braille") + ".txt";
+  a.download = (currentFile?.name.replace(/\.[^.]+$/, '') ?? 'art') + '.txt';
   a.click();
   URL.revokeObjectURL(a.href);
 });
+
+// Init
+syncLabels();
+syncModeUI();

@@ -60,7 +60,6 @@
       background: #1a1a1a;
       display: block;
       max-height: 420px;
-      object-fit: contain;
     }
 
     /* ── Two-column layout ── */
@@ -119,7 +118,7 @@
       font-size: 0.78rem;
       color: #7c6af5;
       text-align: right;
-      min-width: 3ch;
+      min-width: 4ch;
       grid-column: 2;
       font-variant-numeric: tabular-nums;
     }
@@ -166,7 +165,6 @@
       padding: 0.28rem 0.5rem;
       font-size: 0.82rem;
       cursor: pointer;
-      accent-color: #7c6af5;
     }
 
     /* ── Checkbox row ── */
@@ -208,7 +206,7 @@
       gap: 0.5rem;
     }
 
-    #braille-output {
+    #art-output {
       display: block;
       width: 100%;
       min-height: 300px;
@@ -275,7 +273,7 @@
       </div>
 
       <div class="control-section">
-        <div class="section-title">Adjustments</div>
+        <div class="section-title">Color</div>
 
         <div class="slider-row">
           <label for="brightness-input">Brightness</label>
@@ -290,9 +288,15 @@
         </div>
 
         <div class="slider-row">
-          <label for="grayscale-input">Grayscale</label>
-          <span class="val" id="grayscale-val">0%</span>
-          <input type="range" id="grayscale-input" min="0" max="100" value="0" />
+          <label for="saturation-input">Saturation</label>
+          <span class="val" id="saturation-val">100%</span>
+          <input type="range" id="saturation-input" min="0" max="200" value="100" />
+        </div>
+
+        <div class="slider-row">
+          <label for="hue-input">Hue</label>
+          <span class="val" id="hue-val">0°</span>
+          <input type="range" id="hue-input" min="0" max="360" value="0" />
         </div>
 
         <div class="check-row">
@@ -301,23 +305,44 @@
         </div>
       </div>
 
-      <div class="control-section" id="processing-section">
+      <div class="control-section">
         <div class="section-title">Processing</div>
 
-        <div class="slider-row" id="threshold-row">
+        <div class="slider-row">
+          <label for="sharpness-input">Sharpness</label>
+          <span class="val" id="sharpness-val">0</span>
+          <input type="range" id="sharpness-input" min="-10" max="10" value="0" />
+        </div>
+
+        <div class="check-row">
+          <label for="edge-input">Edge Detection</label>
+          <input type="checkbox" id="edge-input" />
+        </div>
+
+        <div id="threshold-row" class="slider-row">
           <label for="threshold-input">Threshold</label>
           <span class="val" id="threshold-val">128</span>
           <input type="range" id="threshold-input" min="1" max="254" value="128" />
         </div>
+      </div>
 
-        <div class="select-row" id="ramp-row" style="display:none;">
-          <label for="ramp-input">Ramp</label>
+      <div class="control-section" id="ascii-section" style="display:none;">
+        <div class="section-title">ASCII</div>
+
+        <div class="select-row">
+          <label for="ramp-input">Gradient</label>
           <select id="ramp-input">
             <option value="standard">Standard</option>
             <option value="dense">Dense</option>
-            <option value="minimal">Minimal</option>
             <option value="blocks">Blocks</option>
+            <option value="minimal">Minimal</option>
           </select>
+        </div>
+
+        <div class="slider-row">
+          <label for="density-input">Space Density</label>
+          <span class="val" id="density-val">0%</span>
+          <input type="range" id="density-input" min="0" max="100" value="0" />
         </div>
       </div>
 
@@ -326,6 +351,10 @@
         <div class="check-row">
           <label for="codeblock-input">Discord code block</label>
           <input type="checkbox" id="codeblock-input" checked />
+        </div>
+        <div class="check-row">
+          <label for="border-input">Transparent frame</label>
+          <input type="checkbox" id="border-input" />
         </div>
       </div>
 
@@ -338,7 +367,7 @@
 
     <!-- Output -->
     <div class="output-panel">
-      <pre id="braille-output">Upload an image to get started.</pre>
+      <pre id="art-output">Upload an image to get started.</pre>
       <div class="output-actions">
         <span id="copy-status">Copied!</span>
         <button class="btn btn-ghost" id="save-btn"  disabled>Save .txt</button>
