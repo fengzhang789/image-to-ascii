@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Image to ASCII</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+      gap: 1.5rem;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #fff;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem;
+      width: 100%;
+      max-width: 800px;
+    }
+
+    .upload-label {
+      cursor: pointer;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 0.5rem 1rem;
+      font-size: 0.9rem;
+      transition: background 0.15s;
+    }
+    .upload-label:hover { background: #2a2a2a; }
+
+    #file-input { display: none; }
+
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.85rem;
+    }
+
+    label { color: #aaa; }
+
+    input[type="number"] {
+      width: 70px;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: #e0e0e0;
+      padding: 0.3rem 0.5rem;
+      font-size: 0.85rem;
+    }
+
+    input[type="range"] {
+      accent-color: #7c6af5;
+      width: 120px;
+    }
+
+
+    input[type="checkbox"] { accent-color: #7c6af5; }
+
+    .btn {
+      padding: 0.5rem 1.1rem;
+      border-radius: 6px;
+      border: none;
+      font-size: 0.88rem;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    .btn:disabled { opacity: 0.4; cursor: default; }
+
+    .btn-primary {
+      background: #7c6af5;
+      color: #fff;
+    }
+    .btn-primary:not(:disabled):hover { background: #6a57e0; }
+
+    .btn-secondary {
+      background: #2a2a2a;
+      color: #e0e0e0;
+      border: 1px solid #444;
+    }
+    .btn-secondary:not(:disabled):hover { background: #333; }
+
+    .output-wrapper {
+      width: 100%;
+      max-width: 900px;
+      position: relative;
+    }
+
+    #ascii-output {
+      display: block;
+      width: 100%;
+      min-height: 200px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 0.6rem;
+      line-height: 1.1;
+      white-space: pre;
+      overflow: auto;
+      color: #c8c8c8;
+    }
+
+    .copy-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.6rem;
+      margin-top: 0.5rem;
+      align-items: center;
+    }
+
+    #copy-status {
+      font-size: 0.8rem;
+      color: #7c6af5;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #copy-status.show { opacity: 1; }
+
+    #drop-zone {
+      width: 100%;
+      max-width: 800px;
+      border: 2px dashed #333;
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      color: #555;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    #drop-zone.drag-over {
+      border-color: #7c6af5;
+      color: #7c6af5;
+    }
+    #drop-zone:has(+ #file-input) { display: block; }
+
+    canvas { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Image to ASCII</h1>
+
+  <div id="drop-zone">Drop an image here, or click to upload</div>
+  <input type="file" id="file-input" accept="image/*" />
+
+  <div class="controls">
+    <div class="control-group">
+      <label for="width-input">Width (chars)</label>
+      <input type="number" id="width-input" value="60" min="10" max="300" />
+    </div>
+    <div class="control-group">
+      <label for="threshold-input">Threshold</label>
+      <input type="range" id="threshold-input" value="128" min="1" max="254" />
+      <span id="threshold-value" style="color:#aaa;font-size:0.8rem;min-width:2.5ch">128</span>
+    </div>
+    <div class="control-group">
+      <label for="invert-input">Invert</label>
+      <input type="checkbox" id="invert-input" />
+    </div>
+    <div class="control-group">
+      <label for="codeblock-input">Discord code block</label>
+      <input type="checkbox" id="codeblock-input" checked />
+    </div>
+    <button class="btn btn-primary" id="convert-btn" disabled>Convert</button>
+  </div>
+
+  <div class="output-wrapper">
+    <pre id="ascii-output">Upload an image to get started.</pre>
+    <div class="copy-row">
+      <span id="copy-status">Copied!</span>
+      <button class="btn btn-secondary" id="copy-btn" disabled>Copy to clipboard</button>
+    </div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <script type="module" src="/main.js"></script>
+</body>
+</html>
