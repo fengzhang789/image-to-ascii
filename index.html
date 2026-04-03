@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Image to ASCII</title>
+  <title>Image to Braille Art</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       font-family: system-ui, sans-serif;
-      background: #0f0f0f;
-      color: #e0e0e0;
+      background: #111;
+      color: #ddd;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
@@ -19,181 +19,336 @@
       gap: 1.5rem;
     }
 
-    h1 {
-      font-size: 1.4rem;
-      font-weight: 600;
-      letter-spacing: 0.05em;
-      color: #fff;
-    }
+    h1 { font-size: 1.3rem; font-weight: 600; color: #fff; letter-spacing: 0.04em; }
 
-    .controls {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 1rem;
-      width: 100%;
-      max-width: 800px;
-    }
-
-    .upload-label {
-      cursor: pointer;
-      background: #1e1e1e;
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 0.5rem 1rem;
-      font-size: 0.9rem;
-      transition: background 0.15s;
-    }
-    .upload-label:hover { background: #2a2a2a; }
-
-    #file-input { display: none; }
-
-    .control-group {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.85rem;
-    }
-
-    label { color: #aaa; }
-
-    input[type="number"] {
-      width: 70px;
-      background: #1e1e1e;
-      border: 1px solid #333;
-      border-radius: 4px;
-      color: #e0e0e0;
-      padding: 0.3rem 0.5rem;
-      font-size: 0.85rem;
-    }
-
-    input[type="range"] {
-      accent-color: #7c6af5;
-      width: 120px;
-    }
-
-
-    input[type="checkbox"] { accent-color: #7c6af5; }
-
-    .btn {
-      padding: 0.5rem 1.1rem;
-      border-radius: 6px;
-      border: none;
-      font-size: 0.88rem;
-      cursor: pointer;
-      transition: background 0.15s, opacity 0.15s;
-    }
-    .btn:disabled { opacity: 0.4; cursor: default; }
-
-    .btn-primary {
-      background: #7c6af5;
-      color: #fff;
-    }
-    .btn-primary:not(:disabled):hover { background: #6a57e0; }
-
-    .btn-secondary {
-      background: #2a2a2a;
-      color: #e0e0e0;
-      border: 1px solid #444;
-    }
-    .btn-secondary:not(:disabled):hover { background: #333; }
-
-    .output-wrapper {
+    /* ── Drop zone ── */
+    #drop-zone {
       width: 100%;
       max-width: 900px;
-      position: relative;
+      border: 2px dashed #333;
+      border-radius: 8px;
+      padding: 1.5rem;
+      text-align: center;
+      color: #555;
+      font-size: 0.88rem;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    #drop-zone.drag-over { border-color: #7c6af5; color: #7c6af5; }
+    #drop-zone.has-file  { border-color: #444; color: #aaa; }
+    #file-input { display: none; }
+
+    /* ── Preview ── */
+    #preview-section {
+      display: none;
+      width: 100%;
+      max-width: 900px;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    #preview-section .section-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #555;
+    }
+    #preview-canvas {
+      max-width: 100%;
+      border-radius: 8px;
+      border: 1px solid #2a2a2a;
+      background: #1a1a1a;
+      display: block;
+      max-height: 420px;
+      object-fit: contain;
     }
 
-    #ascii-output {
+    /* ── Two-column layout ── */
+    .main-layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 1.2rem;
+      width: 100%;
+      max-width: 900px;
+      align-items: start;
+    }
+    @media (max-width: 640px) {
+      .main-layout { grid-template-columns: 1fr; }
+    }
+
+    /* ── Controls panel ── */
+    .controls-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .control-section {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .section-title {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #666;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid #222;
+    }
+
+    /* ── Slider row ── */
+    .slider-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.3rem 0.6rem;
+      align-items: center;
+    }
+    .slider-row label {
+      font-size: 0.82rem;
+      color: #bbb;
+      grid-column: 1;
+    }
+    .slider-row .val {
+      font-size: 0.78rem;
+      color: #7c6af5;
+      text-align: right;
+      min-width: 3ch;
+      grid-column: 2;
+      font-variant-numeric: tabular-nums;
+    }
+    .slider-row input[type="range"] {
+      grid-column: 1 / -1;
+      width: 100%;
+      accent-color: #7c6af5;
+      height: 3px;
+      cursor: pointer;
+    }
+
+    /* ── Number row ── */
+    .number-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .number-row label { font-size: 0.82rem; color: #bbb; }
+    .number-row input[type="number"] {
+      width: 72px;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: #ddd;
+      padding: 0.28rem 0.5rem;
+      font-size: 0.82rem;
+      text-align: right;
+    }
+
+    /* ── Select row ── */
+    .select-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .select-row label { font-size: 0.82rem; color: #bbb; }
+    .select-row select {
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: #ddd;
+      padding: 0.28rem 0.5rem;
+      font-size: 0.82rem;
+      cursor: pointer;
+      accent-color: #7c6af5;
+    }
+
+    /* ── Checkbox row ── */
+    .check-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .check-row label { font-size: 0.82rem; color: #bbb; cursor: pointer; }
+    .check-row input[type="checkbox"] { accent-color: #7c6af5; cursor: pointer; }
+
+    /* ── Buttons ── */
+    .btn-row {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .btn {
+      flex: 1;
+      padding: 0.5rem 0.8rem;
+      border-radius: 6px;
+      border: none;
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+      white-space: nowrap;
+    }
+    .btn:disabled { opacity: 0.35; cursor: default; }
+    .btn-primary  { background: #7c6af5; color: #fff; }
+    .btn-primary:not(:disabled):hover  { background: #6a57e0; }
+    .btn-ghost    { background: #1e1e1e; color: #bbb; border: 1px solid #333; }
+    .btn-ghost:not(:disabled):hover    { background: #272727; }
+
+    /* ── Output panel ── */
+    .output-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    #braille-output {
       display: block;
       width: 100%;
-      min-height: 200px;
+      min-height: 300px;
       background: #1a1a1a;
       border: 1px solid #2a2a2a;
       border-radius: 8px;
       padding: 1rem;
       font-family: 'Courier New', Courier, monospace;
       font-size: 0.6rem;
-      line-height: 1.1;
+      line-height: 1.15;
       white-space: pre;
       overflow: auto;
-      color: #c8c8c8;
+      color: #ccc;
     }
 
-    .copy-row {
+    .output-actions {
       display: flex;
+      gap: 0.5rem;
       justify-content: flex-end;
-      gap: 0.6rem;
-      margin-top: 0.5rem;
       align-items: center;
     }
 
     #copy-status {
-      font-size: 0.8rem;
+      font-size: 0.78rem;
       color: #7c6af5;
       opacity: 0;
       transition: opacity 0.3s;
     }
     #copy-status.show { opacity: 1; }
 
-    #drop-zone {
-      width: 100%;
-      max-width: 800px;
-      border: 2px dashed #333;
-      border-radius: 8px;
-      padding: 2rem;
-      text-align: center;
-      color: #555;
-      font-size: 0.9rem;
-      cursor: pointer;
-      transition: border-color 0.15s, color 0.15s;
-    }
-    #drop-zone.drag-over {
-      border-color: #7c6af5;
-      color: #7c6af5;
-    }
-    #drop-zone:has(+ #file-input) { display: block; }
-
     canvas { display: none; }
+    #preview-canvas { display: block; }
   </style>
 </head>
 <body>
-  <h1>Image to ASCII</h1>
+  <h1>Image to Braille Art</h1>
 
   <div id="drop-zone">Drop an image here, or click to upload</div>
   <input type="file" id="file-input" accept="image/*" />
 
-  <div class="controls">
-    <div class="control-group">
-      <label for="width-input">Width (chars)</label>
-      <input type="number" id="width-input" value="60" min="10" max="300" />
-    </div>
-    <div class="control-group">
-      <label for="threshold-input">Threshold</label>
-      <input type="range" id="threshold-input" value="128" min="1" max="254" />
-      <span id="threshold-value" style="color:#aaa;font-size:0.8rem;min-width:2.5ch">128</span>
-    </div>
-    <div class="control-group">
-      <label for="invert-input">Invert</label>
-      <input type="checkbox" id="invert-input" />
-    </div>
-    <div class="control-group">
-      <label for="codeblock-input">Discord code block</label>
-      <input type="checkbox" id="codeblock-input" checked />
-    </div>
-    <button class="btn btn-primary" id="convert-btn" disabled>Convert</button>
+  <div id="preview-section">
+    <span class="section-label">Preview</span>
+    <canvas id="preview-canvas"></canvas>
   </div>
 
-  <div class="output-wrapper">
-    <pre id="ascii-output">Upload an image to get started.</pre>
-    <div class="copy-row">
-      <span id="copy-status">Copied!</span>
-      <button class="btn btn-secondary" id="copy-btn" disabled>Copy to clipboard</button>
+  <div class="main-layout">
+
+    <!-- Controls -->
+    <div class="controls-panel">
+
+      <div class="control-section">
+        <div class="section-title">Image</div>
+        <div class="number-row">
+          <label for="width-input">Width (chars)</label>
+          <input type="number" id="width-input" value="60" min="10" max="300" />
+        </div>
+        <div class="select-row">
+          <label for="mode-input">Mode</label>
+          <select id="mode-input">
+            <option value="braille">Braille</option>
+            <option value="ascii">ASCII</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="control-section">
+        <div class="section-title">Adjustments</div>
+
+        <div class="slider-row">
+          <label for="brightness-input">Brightness</label>
+          <span class="val" id="brightness-val">100%</span>
+          <input type="range" id="brightness-input" min="0" max="200" value="100" />
+        </div>
+
+        <div class="slider-row">
+          <label for="contrast-input">Contrast</label>
+          <span class="val" id="contrast-val">100%</span>
+          <input type="range" id="contrast-input" min="0" max="200" value="100" />
+        </div>
+
+        <div class="slider-row">
+          <label for="grayscale-input">Grayscale</label>
+          <span class="val" id="grayscale-val">0%</span>
+          <input type="range" id="grayscale-input" min="0" max="100" value="0" />
+        </div>
+
+        <div class="check-row">
+          <label for="invert-input">Invert</label>
+          <input type="checkbox" id="invert-input" />
+        </div>
+      </div>
+
+      <div class="control-section" id="processing-section">
+        <div class="section-title">Processing</div>
+
+        <div class="slider-row" id="threshold-row">
+          <label for="threshold-input">Threshold</label>
+          <span class="val" id="threshold-val">128</span>
+          <input type="range" id="threshold-input" min="1" max="254" value="128" />
+        </div>
+
+        <div class="select-row" id="ramp-row" style="display:none;">
+          <label for="ramp-input">Ramp</label>
+          <select id="ramp-input">
+            <option value="standard">Standard</option>
+            <option value="dense">Dense</option>
+            <option value="minimal">Minimal</option>
+            <option value="blocks">Blocks</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="control-section">
+        <div class="section-title">Output</div>
+        <div class="check-row">
+          <label for="codeblock-input">Discord code block</label>
+          <input type="checkbox" id="codeblock-input" checked />
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="convert-btn" disabled>Convert</button>
+        <button class="btn btn-ghost"   id="reset-btn">Reset</button>
+      </div>
+
     </div>
+
+    <!-- Output -->
+    <div class="output-panel">
+      <pre id="braille-output">Upload an image to get started.</pre>
+      <div class="output-actions">
+        <span id="copy-status">Copied!</span>
+        <button class="btn btn-ghost" id="save-btn"  disabled>Save .txt</button>
+        <button class="btn btn-ghost" id="copy-btn"  disabled>Copy</button>
+      </div>
+    </div>
+
   </div>
 
   <canvas id="canvas"></canvas>
-
   <script type="module" src="/main.js"></script>
 </body>
 </html>
